@@ -1,0 +1,271 @@
+---
+title: "Simulation_3"
+date: "2024-04-05"
+output: html_document
+---
+
+CD Function
+```{r}
+library(reticulate)
+use_condaenv(".../miniconda3")
+
+# Define the Python function using reticulate
+id_estimators <- function(df, k) {
+  py_run_string("
+import skdim
+import pandas as pd
+import matplotlib.pyplot as plt
+
+def id_estimators(df, k):
+    # Maximum Likelihood algorithm
+    MLE = skdim.id.MLE(K=k).fit(df).dimension_
+
+    # Method Of Moments algorithm
+    MOM = skdim.id.MOM().fit(df).dimension_
+
+    return {
+        'MLE': MLE,
+        'MOM': MOM,
+      }
+  ")
+  
+  # Call the Python function from R
+  result <- py$id_estimators(df, k)
+  
+  # Return the results as a list
+  return(result)
+}
+
+
+
+est_Vx_Vs <- function(X1, X2, d1, d2) {
+  OUT <- list()
+  
+  p <- ncol(X1)
+  
+  Cx1 <- cov(X1)
+  Cx2 <- cov(X2)
+  
+  OUT$V1 <- eigen(Cx1)$vectors[,1:d1]
+  OUT$V2 <- eigen(Cx2)$vectors[,1:d2]
+  
+  return(OUT)
+}
+
+sigma1_test_stat = function(X1, X2, d1, d2) {
+  
+  OUT <- est_Vx_Vs(X1, X2, d1, d2)
+  
+  U = OUT$V1
+  V = OUT$V2
+  
+  ?pmin
+  M <- t(U) %*% V
+  SVD <- svd(M)
+  cosines <- SVD$d
+  # To prevent any numerical precision issues from creating values outside the interval [-1,1]
+  cosines <- pmin(1, pmax(-1, cosines))
+  return(rev(cosines)[1])
+  
+}
+
+
+sing_vals <- function(U, V) {
+  M <- t(U) %*% V
+  SVD <- svd(M)
+  cosines <- SVD$d
+  # To prevent any numerical precision issues from creating values outside the interval [-1,1]
+  cosines <- pmin(1, pmax(-1, cosines))
+  return(cosines)
+}
+
+boot_test = function(X1, X2, d1, d2, B) {
+  
+  X1 <- scale(X1, center = T, scale = F)
+  X2 <- scale(X2, center = T, scale = F)
+  
+  test_stat = sigma1_test_stat(X1, X2, d1, d2)
+  n1 = nrow(X1)
+  n2 = nrow(X2)
+  
+  boot_stats = vector()
+  
+  for (j in 1:B) {
+    print(j)
+
+    X1t <- X1[sample(1:n1, size = n1, replace = T),]
+    X2t <- rbind(X1, X2)[sample(1:(n1+n2), size = n2, replace = T),]
+    boot_stats[j] = sigma1_test_stat(X1t, X2t, d1, d2)
+  }
+  
+  p_value <- mean(boot_stats < test_stat)
+  
+  return(list(test_stat = test_stat, p_value = p_value))
+}
+
+CD = function(X1, X2, d1, d2, epsilon, B) {
+  
+  p <- ncol(X1)
+  
+  sigma_x1 <- cov(X1)
+  sigma_x2 <- cov(X2)
+  
+  OUT <- est_Vx_Vs(X1, X2, d1, d2)
+  singular_vals <- rev(sing_vals(OUT$V1, OUT$V2))
+  
+  L <- list()
+  L$CD <- sum(singular_vals < 1 - epsilon) + max(d1-d2, 0)
+  
+  test = boot_test(X1, X2, d1, d2, B)
+  
+  L$test_stat = test$test_stat
+  L$p_value = test$p_value
+  L$singular_vals <- singular_vals
+  
+  return(L)
+  
+}
+
+```
+
+
+Load corrupted MNIST data
+```{r}
+library(reticulate)
+# use_python("/usr/bin/python3")
+numpy <- import("numpy")
+crpt_mnist <- numpy$load("background.npy")
+crpt_mnist <- data.frame(crpt_mnist)
+```
+
+Load MNIST 0's
+```{r}
+library(R.matlab)
+mnist <- readMat("mnist_all.mat")
+mnist0 <- mnist$train0
+mnist0 <- data.frame(mnist0)
+```
+
+Idea: 
+
+Foreground = MNIST0 + Line
+Background = MNIST0 + Corrupted noise
+
+Random split
+```{r}
+set.seed(1)
+
+idxs <- sample(1:5923, size = 5923 %/% 2)
+fore <- mnist0[idxs,]
+back <- mnist0[-idxs,]
+```
+
+Foreground = MNIST0 + Line
+```{r}
+set.seed(1)
+
+for (i in 1:2961) {
+
+  randlength <- sample(1:28, 1)
+
+  fore[i, (1:randlength)*28 - 6] <- 255
+
+}
+
+# write.csv(fore, "MNIST_plus_line.csv")
+```
+
+Background = MNIST0 + Corrupted noise
+
+```{r}
+set.seed(2)
+
+idxs2 <- sample(1:5000, size = 2962)
+crpt_mnist2 <- crpt_mnist[idxs2,]
+
+crpt_mnist2 <- crpt_mnist2*255
+background = (back + crpt_mnist2) / 2
+# write.csv(background, "MNIST_plus_grass.csv")
+```
+
+
+
+2. Visualization & Dimension Estimation 
+
+Foreground Visualization
+
+```{r}
+
+mnist_line_image_list <- lapply(1:nrow(fore), function(i) {
+  matrix(fore[i,], ncol = 28)
+})
+
+for (i in 1:2961) {
+  mode(mnist_line_image_list[[i]]) = "numeric"  
+}
+
+# display image 
+display_image <- function(mat, title = "") {
+  image(1:ncol(mat), 1:nrow(mat), mat, col = grey.colors(256), axes = TRUE, main = title)
+}
+
+# png("mnist_plus_line_2.png", width = 600, height = 450)
+# display_image(mnist_line_image_list[[15]])
+# dev.off()
+```
+
+
+Foreground intrinsic dimension estimation: MNIST + line (unknown)
+
+```{r}
+library(dplyr)
+library(magrittr)
+
+# intrinsic dimension estimation
+result_fore <- id_estimators(fore, as.integer(10))
+result_fore <- list(result_fore)
+result_fore <- as.data.frame(result_fore)
+
+result_fore <- result_fore %>% mutate_if(is.numeric, round)
+result_fore
+```
+
+
+
+Background Visualization
+```{r}
+
+mnist_grass_image_list <- lapply(1:nrow(background), function(i) {
+  matrix(background[i,], ncol = 28)
+})
+
+for (i in 1:2961) {
+  mode(mnist_grass_image_list[[i]]) = "numeric"  
+}
+
+# display image 
+display_image <- function(mat, title = "") {
+  image(1:ncol(mat), 1:nrow(mat), mat, col = grey.colors(256), axes = TRUE, main = title)
+}
+
+# png("mnist_plus_grass_2.png", width = 600, height = 450)
+# display_image(mnist_grass_image_list[[67]])
+# dev.off()
+```
+
+
+Background intrinsic dimension estimation: MNIST + grass (unknown)
+
+```{r}
+library(dplyr)
+library(magrittr)
+
+# intrinsic dimension estimation
+result_back <- id_estimators(background, as.integer(10))
+result_back <- list(result_back)
+result_back <- as.data.frame(result_back)
+
+result_back <- result_back %>% mutate_if(is.numeric, round)
+result_back
+
+```

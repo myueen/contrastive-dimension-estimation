@@ -1,0 +1,202 @@
+---
+title: "Simulation 3 Disk Line"
+output: html_document
+date: "2024-03-25"
+---
+
+Load libraries
+
+```{r}
+library(pracma)
+library(Rdimtools)
+library(Matrix)
+```
+
+Code for method
+
+```{r}
+est_Vx_Vs <- function(X1, X2, d1, d2) {
+  OUT <- list()
+  
+  p <- ncol(X1)
+  
+  Cx1 <- cov(X1)
+  Cx2 <- cov(X2)
+  
+  OUT$V1 <- eigen(Cx1)$vectors[,1:d1]
+  OUT$V2 <- eigen(Cx2)$vectors[,1:d2]
+  
+  return(OUT)
+}
+
+sigma1_test_stat = function(X1, X2, d1, d2) {
+  
+  OUT <- est_Vx_Vs(X1, X2, d1, d2)
+  
+  U = OUT$V1
+  V = OUT$V2
+  
+  M <- t(U) %*% V
+  SVD <- svd(M)
+  cosines <- SVD$d
+  # To prevent any numerical precision issues from creating values outside the interval [-1,1]
+  cosines <- pmin(1, pmax(-1, cosines))
+  return(rev(cosines)[1])
+  
+}
+
+sing_vals <- function(U, V) {
+  M <- t(U) %*% V
+  SVD <- svd(M)
+  cosines <- SVD$d
+  # To prevent any numerical precision issues from creating values outside the interval [-1,1]
+  cosines <- pmin(1, pmax(-1, cosines))
+  return(cosines)
+}
+
+boot_test = function(X1, X2, d1, d2, B) {
+  
+  X1 <- scale(X1, center = T, scale = F)
+  X2 <- scale(X2, center = T, scale = F)
+  
+  test_stat = sigma1_test_stat(X1, X2, d1, d2)
+  n1 = nrow(X1)
+  n2 = nrow(X2)
+  
+  boot_stats = vector()
+  
+  for (j in 1:B) {
+    
+    print(j)
+    
+    X1t <- X1[sample(1:n1, size = n1, replace = T),]
+    X2t <- rbind(X1, X2)[sample(1:(n1+n2), size = n2, replace = T),]
+    boot_stats[j] = sigma1_test_stat(X1t, X2t, d1, d2)
+    
+  }
+  
+  p_value <- mean(boot_stats < test_stat)
+  
+  return(list(test_stat = test_stat, p_value = p_value))
+  
+}
+
+CD = function(X1, X2, d1, d2, epsilon, B) {
+  
+  p <- ncol(X1)
+  
+  sigma_x1 <- cov(X1)
+  sigma_x2 <- cov(X2)
+  
+  OUT <- est_Vx_Vs(X1, X2, d1, d2)
+  singular_vals <- rev(sing_vals(OUT$V1, OUT$V2))
+  
+  L <- list()
+  L$CD <- sum(singular_vals < 1 - epsilon) + max(d1-d2, 0)
+  
+  test = boot_test(X1, X2, d1, d2, B)
+  
+  L$test_stat = test$test_stat
+  L$p_value = test$p_value
+  L$singular_vals <- singular_vals
+  
+  return(L)
+  
+}
+```
+
+
+Load corrupted MNIST data
+
+```{r}
+library(reticulate)
+use_python("/usr/bin/python3")
+numpy <- import("numpy")
+data <- numpy$load("background.npy")
+data_matrix <- as.matrix(data)
+```
+
+
+Create a single disk
+
+```{r}
+dist <- function(x1, y1, x2, y2) {
+  return(sqrt((x1 - x2)^2 + (y1 - y2)^2))
+}
+
+create_disk <- function(cx, cy, r) {
+  v <- rep(0, 784)
+  for (p in 1:784) {
+    x = p %/% 28
+    y = p %% 28
+    if (abs(dist(x, y, cx, cy) - r) <= 1) {
+      v[p] = 1
+    }
+  }
+  return(v)
+}
+
+v <- create_disk(14, 14, 10)
+
+```
+
+Create 5000 disks to be split into foreground/background.
+
+```{r}
+disks <- matrix(0, nrow = 5000, ncol = 784)
+
+set.seed(1)
+
+for (i in 1:5000) {
+  
+  cx <- sample(5:24, 1)
+  cy <- sample(5:24, 1)
+  r <- sample(1:10, 1)
+  
+  disks[i, ] <- create_disk(cx, cy, r)
+  
+}
+
+disks <- data.frame(disks)
+```
+
+
+So far, dim = 3. Foreground: Add a line.
+
+```{r}
+fore <- disks[1:2500,]
+
+set.seed(1)
+
+for (i in 1:2500) {
+  
+  randlength <- sample(1:28, 1)
+  fore[i, (1:randlength)*28 - 6] = 1
+  
+}
+```
+
+Foreground d = 4.
+
+Let's add the background noise.
+
+```{r}
+back <- disks[2501:5000,]
+data <- data.frame(data)[1:2500,]
+
+average <- (back + data)/2
+```
+
+
+Run method
+
+```{r}
+back <- average
+
+# write.csv(back, file = "disk_plus_grass.csv")
+
+OUT <- CD(fore, back, 4, 23, 0.1, 1000)
+
+OUT
+```
+
