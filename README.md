@@ -1,7 +1,7 @@
 contrastive-dimension-estimation
 ======
 
-This is the repository for the "Contrastive dimension reduction: when and how?" submission to NeurIPS 2024 and contains methods and experiments for contrastive dimension estimation. The purpose of the CDE function is to find the contrastive dimension between a foreground dataset and a background dataset. In other words, the methods quantify the information unique to the foreground group with respect to the background group. 
+This is the repository for the "Contrastive dimension reduction: when and how?" that contains methods and experiments for contrastive dimension estimation. The purpose of the CDE function is to find the contrastive dimension between a foreground dataset and a background dataset. In other words, the methods quantify the information unique to the foreground group with respect to the background group. 
 
 
 
